@@ -19,6 +19,7 @@ class MainActivity : Activity() {
     private lateinit var etClickDelay: EditText
     private lateinit var etMaxClicks: EditText
     private lateinit var etFieldMapJson: EditText
+    private lateinit var etPauseKeywords: EditText
     private lateinit var switchAutoSync: Switch
     private lateinit var tvPreview: TextView
 
@@ -32,6 +33,7 @@ class MainActivity : Activity() {
         etClickDelay = findViewById(R.id.etClickDelay)
         etMaxClicks = findViewById(R.id.etMaxClicks)
         etFieldMapJson = findViewById(R.id.etFieldMapJson)
+        etPauseKeywords = findViewById(R.id.etPauseKeywords)
         switchAutoSync = findViewById(R.id.switchAutoSync)
         tvPreview = findViewById(R.id.tvPreview)
 
@@ -81,6 +83,7 @@ class MainActivity : Activity() {
         etClickDelay.setText(Prefs.getClickDelayMs(this).toString())
         etMaxClicks.setText(Prefs.getMaxClicks(this).toString())
         etFieldMapJson.setText(Prefs.getFieldMapJson(this))
+        etPauseKeywords.setText(Prefs.getPauseKeywords(this).joinToString(","))
         switchAutoSync.isChecked = Prefs.getAutoSyncEnabled(this)
     }
 
@@ -91,5 +94,6 @@ class MainActivity : Activity() {
         Prefs.setClickDelayMs(this, etClickDelay.text.toString().toLongOrNull() ?: 300L)
         Prefs.setMaxClicks(this, etMaxClicks.text.toString().toIntOrNull() ?: 60)
         Prefs.setFieldMapJson(this, etFieldMapJson.text.toString())
+        Prefs.setPauseKeywords(this, etPauseKeywords.text.toString())
     }
 }
