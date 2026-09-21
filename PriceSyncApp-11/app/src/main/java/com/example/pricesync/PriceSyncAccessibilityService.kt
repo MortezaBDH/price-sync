@@ -7,6 +7,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import org.json.JSONArray
 
 /**
@@ -82,6 +83,9 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         collectClickableNodes(tgtRoot, tgtClicks)
 
         val sb = StringBuilder()
+        val blocked = isBlockedByPopup(srcRoot, tgtRoot)
+        sb.append(if (blocked) "⛔ الان یه پاپ‌آپ/بنر معامله دیده می‌شود — سینک موقتاً متوقف می‌ماند.\n\n"
+                   else "✅ پاپ‌آپ معامله دیده نمی‌شود.\n\n")
         sb.append("منبع (").append(sourcePkg).append(")")
         sb.append(if (srcRoot == null) " -> پیدا نشد! (اپ باز است؟ نام پکیج درست است؟)\n" else ":\n")
         srcNums.forEachIndexed { i, p -> sb.append("  [$i] ${p.second}\n") }
@@ -107,6 +111,12 @@ class PriceSyncAccessibilityService : AccessibilityService() {
             Log.e(TAG, "فرمت JSON تنظیمات فیلدها اشتباه است: ${e.message}")
             return
         }
+        val srcRoot = findRootForPackage(Prefs.getSourcePackage(this))
+        val tgtRoot = findRootForPackage(Prefs.getTargetPackage(this))
+        if (isBlockedByPopup(srcRoot, tgtRoot)) {
+            Log.i(TAG, "پاپ‌آپ/بنر معامله دیده شد؛ این چرخه رد می‌شود")
+            return
+        }
         val maxAttempts = Prefs.getMaxClicks(this)
         activeFieldSyncs += configs.size
         for (field in configs) {
@@ -127,6 +137,11 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         val srcRoot = findRootForPackage(sourcePkg)
         val tgtRoot = findRootForPackage(targetPkg)
         if (srcRoot == null || tgtRoot == null) {
+            finishOneField()
+            return
+        }
+        if (isBlockedByPopup(srcRoot, tgtRoot)) {
+            Log.i(TAG, "پاپ‌آپ/بنر معامله وسط چرخه ظاهر شد؛ «${field.name}» متوقف شد")
             finishOneField()
             return
         }
@@ -174,14 +189,56 @@ class PriceSyncAccessibilityService : AccessibilityService() {
     private fun findRootForPackage(pkg: String): AccessibilityNodeInfo? {
         if (pkg.isBlank()) return null
         try {
+            var best: AccessibilityNodeInfo? = null
+            var bestArea = -1L
+            var bestIsApp = false
             for (w in windows) {
-                val r = w.root
-                if (r != null && r.packageName == pkg) return r
+                val r = w.root ?: continue
+                if (r.packageName != pkg) continue
+                val rect = Rect()
+                w.getBoundsInScreen(rect)
+                val area = rect.width().toLong() * rect.height().toLong()
+                val isApp = w.type == AccessibilityWindowInfo.TYPE_APPLICATION
+                // اولویت با پنجره‌ی نوع TYPE_APPLICATION (نه یه اعلان کوچیک)،
+                // و در مرحله‌ی بعد بزرگ‌ترین مساحت روی صفحه.
+                val better = when {
+                    best == null -> true
+                    isApp && !bestIsApp -> true
+                    isApp == bestIsApp && area > bestArea -> true
+                    else -> false
+                }
+                if (better) {
+                    best = r
+                    bestArea = area
+                    bestIsApp = isApp
+                }
             }
+            return best
         } catch (e: Exception) {
             Log.e(TAG, "findRootForPackage error: ${e.message}")
         }
         return null
+    }
+
+    /** آیا صفحه‌ی منبع یا مقصد الان یکی از پاپ‌آپ‌های «درخواست معامله» رو نشون می‌ده؟ */
+    private fun isBlockedByPopup(srcRoot: AccessibilityNodeInfo?, tgtRoot: AccessibilityNodeInfo?): Boolean {
+        val keywords = Prefs.getPauseKeywords(this)
+        if (keywords.isEmpty()) return false
+        return containsAnyText(srcRoot, keywords) || containsAnyText(tgtRoot, keywords)
+    }
+
+    private fun containsAnyText(root: AccessibilityNodeInfo?, keywords: List<String>): Boolean {
+        if (root == null) return false
+        val t = root.text?.toString() ?: root.contentDescription?.toString()
+        if (!t.isNullOrBlank()) {
+            for (k in keywords) {
+                if (k.isNotEmpty() && t.contains(k)) return true
+            }
+        }
+        for (i in 0 until root.childCount) {
+            if (containsAnyText(root.getChild(i), keywords)) return true
+        }
+        return false
     }
 
     private fun collectNumberNodes(
