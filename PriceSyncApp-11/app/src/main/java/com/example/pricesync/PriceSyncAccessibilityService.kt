@@ -196,6 +196,24 @@ class PriceSyncAccessibilityService : AccessibilityService() {
             if (digits.length >= minDigits) {
                 digits.toLongOrNull()?.let { out.add(root to it) }
             }
+        } else if (root.childCount in 1..8) {
+            // بعضی صفحات وب برای انیمیشن، رقم‌های یک عدد رو بین چند
+            // span جدا می‌شکنن. اگه خود گره متن نداشت ولی چند فرزند
+            // «ساده» (بدون نوه) داره، متن اون فرزندها رو می‌چسبونیم.
+            var allLeafLike = true
+            val combined = StringBuilder()
+            for (i in 0 until root.childCount) {
+                val child = root.getChild(i) ?: continue
+                if (child.childCount > 0) allLeafLike = false
+                val ct = child.text?.toString() ?: child.contentDescription?.toString()
+                if (!ct.isNullOrBlank()) combined.append(ct)
+            }
+            if (allLeafLike && combined.isNotEmpty()) {
+                val digits = normalizeDigits(combined.toString()).filter { it.isDigit() }
+                if (digits.length >= minDigits) {
+                    digits.toLongOrNull()?.let { out.add(root to it) }
+                }
+            }
         }
         for (i in 0 until root.childCount) {
             collectNumberNodes(root.getChild(i), minDigits, out)
