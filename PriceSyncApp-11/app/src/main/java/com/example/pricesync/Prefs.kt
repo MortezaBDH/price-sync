@@ -37,6 +37,14 @@ object Prefs {
     fun getMinDigits(ctx: Context): Int = prefs(ctx).getInt("min_digits", 6)
     fun setMinDigits(ctx: Context, v: Int) { prefs(ctx).edit().putInt("min_digits", v).apply() }
 
+    // کلماتی که اگه تو صفحه‌ی منبع یا مقصد دیده بشن، یعنی یه پاپ‌آپ/بنر
+    // «درخواست معامله» باز شده و باید همگام‌سازی موقتاً متوقف بشه.
+    const val DEFAULT_PAUSE_KEYWORDS = "پنهان کردن,در انتظار,درخواست فروش,درخواست خرید"
+    fun getPauseKeywords(ctx: Context): List<String> =
+        (prefs(ctx).getString("pause_keywords", DEFAULT_PAUSE_KEYWORDS) ?: DEFAULT_PAUSE_KEYWORDS)
+            .split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    fun setPauseKeywords(ctx: Context, v: String) { prefs(ctx).edit().putString("pause_keywords", v).apply() }
+
     fun getFieldMapJson(ctx: Context): String = prefs(ctx).getString("field_map", DEFAULT_FIELD_MAP) ?: DEFAULT_FIELD_MAP
     fun setFieldMapJson(ctx: Context, v: String) { prefs(ctx).edit().putString("field_map", v).apply() }
 }
