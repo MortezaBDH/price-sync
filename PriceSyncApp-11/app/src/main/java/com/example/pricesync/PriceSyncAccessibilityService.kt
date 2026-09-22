@@ -10,15 +10,6 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import org.json.JSONArray
 
-/**
- * سرویس Accessibility که همزمان دو اپ (منبع و مقصد) را در حالت
- * split-screen می‌خواند، و با کلیک شبیه‌سازی‌شده روی دکمه‌های +/-
- * اپ مقصد، اعداد آن را با فرمول source + offset همگام می‌کند.
- *
- * منطق کلیک: در هر مرحله فقط چک می‌کند مقدار فعلی کمتر یا بیشتر از
- * مقدار هدف است و یک کلیک + یا - می‌زند، سپس دوباره می‌خواند.
- * به این ترتیب لازم نیست بداند هر کلیک دقیقا چقدر عدد را تغییر می‌دهد.
- */
 class PriceSyncAccessibilityService : AccessibilityService() {
 
     companion object {
@@ -199,8 +190,6 @@ class PriceSyncAccessibilityService : AccessibilityService() {
                 w.getBoundsInScreen(rect)
                 val area = rect.width().toLong() * rect.height().toLong()
                 val isApp = w.type == AccessibilityWindowInfo.TYPE_APPLICATION
-                // اولویت با پنجره‌ی نوع TYPE_APPLICATION (نه یه اعلان کوچیک)،
-                // و در مرحله‌ی بعد بزرگ‌ترین مساحت روی صفحه.
                 val better = when {
                     best == null -> true
                     isApp && !bestIsApp -> true
@@ -241,7 +230,8 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun collectNumberNodes(
+    /** روش اصلی و امن: فقط متن خودِ هر گره را می‌خواند (همان چیزی که از اول درست کار می‌کرد). */
+    private fun collectNumberNodesSimple(
         root: AccessibilityNodeInfo?,
         minDigits: Int,
         out: MutableList<Pair<AccessibilityNodeInfo, Long>>
@@ -253,27 +243,57 @@ class PriceSyncAccessibilityService : AccessibilityService() {
             if (digits.length >= minDigits) {
                 digits.toLongOrNull()?.let { out.add(root to it) }
             }
-        } else if (root.childCount in 1..8) {
-            // بعضی صفحات وب برای انیمیشن، رقم‌های یک عدد رو بین چند
-            // span جدا می‌شکنن. اگه خود گره متن نداشت ولی چند فرزند
-            // «ساده» (بدون نوه) داره، متن اون فرزندها رو می‌چسبونیم.
-            var allLeafLike = true
+        }
+        for (i in 0 until root.childCount) {
+            collectNumberNodesSimple(root.getChild(i), minDigits, out)
+        }
+    }
+
+    /**
+     * روش کمکی (فقط وقتی روش ساده هیچی پیدا نکند اجرا می‌شود): برای
+     * صفحاتی که رقم‌های یک عدد را بین چند span جدا می‌شکنند. خیلی
+     * سخت‌گیرانه است تا چیز نامربوطی را قاطی نکند: فقط ۲ تا ۴ فرزندِ
+     * «برگ» که هرکدام فقط رقم/کاما/فاصله دارند (نه حرف) ترکیب می‌شوند.
+     */
+    private fun collectNumberNodesAggregate(
+        root: AccessibilityNodeInfo?,
+        minDigits: Int,
+        out: MutableList<Pair<AccessibilityNodeInfo, Long>>
+    ) {
+        if (root == null) return
+        val ownText = root.text?.toString() ?: root.contentDescription?.toString()
+        if (ownText.isNullOrBlank() && root.childCount in 2..4) {
+            var ok = true
             val combined = StringBuilder()
             for (i in 0 until root.childCount) {
-                val child = root.getChild(i) ?: continue
-                if (child.childCount > 0) allLeafLike = false
+                val child = root.getChild(i)
+                if (child == null || child.childCount > 0) { ok = false; break }
                 val ct = child.text?.toString() ?: child.contentDescription?.toString()
-                if (!ct.isNullOrBlank()) combined.append(ct)
+                if (ct.isNullOrBlank()) { ok = false; break }
+                val norm = normalizeDigits(ct).trim()
+                if (norm.isEmpty() || !norm.all { it.isDigit() || it == ',' || it == ' ' }) { ok = false; break }
+                combined.append(ct)
             }
-            if (allLeafLike && combined.isNotEmpty()) {
+            if (ok) {
                 val digits = normalizeDigits(combined.toString()).filter { it.isDigit() }
-                if (digits.length >= minDigits) {
+                if (digits.length in minDigits..12) {
                     digits.toLongOrNull()?.let { out.add(root to it) }
                 }
             }
         }
         for (i in 0 until root.childCount) {
-            collectNumberNodes(root.getChild(i), minDigits, out)
+            collectNumberNodesAggregate(root.getChild(i), minDigits, out)
+        }
+    }
+
+    private fun collectNumberNodes(
+        root: AccessibilityNodeInfo?,
+        minDigits: Int,
+        out: MutableList<Pair<AccessibilityNodeInfo, Long>>
+    ) {
+        collectNumberNodesSimple(root, minDigits, out)
+        if (out.isEmpty()) {
+            collectNumberNodesAggregate(root, minDigits, out)
         }
     }
 
