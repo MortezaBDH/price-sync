@@ -100,6 +100,20 @@
             android:gravity="top|start"
             android:inputType="textMultiLine" />
 
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textStyle="bold"
+            android:text="کلمات هشدار پاپ‌آپ معامله (با کاما جدا کنید):" />
+        <EditText
+            android:id="@+id/etPauseKeywords"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minLines="2"
+            android:gravity="top|start"
+            android:inputType="textMultiLine" />
+
         <Switch
             android:id="@+id/switchAutoSync"
             android:layout_width="wrap_content"
