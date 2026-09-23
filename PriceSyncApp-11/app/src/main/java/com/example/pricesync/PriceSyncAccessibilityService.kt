@@ -80,14 +80,24 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         sb.append("منبع (").append(sourcePkg).append(")")
         sb.append(if (srcRoot == null) " -> پیدا نشد! (اپ باز است؟ نام پکیج درست است؟)\n" else ":\n")
         srcNums.forEachIndexed { i, p -> sb.append("  [$i] ${p.second}\n") }
+        sb.append("(تشخیصی) تعداد گره‌های دارای متن در منبع: ${countTextNodes(srcRoot)}\n")
 
         sb.append("\nمقصد (").append(targetPkg).append(") - اعداد")
         sb.append(if (tgtRoot == null) " -> پیدا نشد!\n" else ":\n")
         tgtNums.forEachIndexed { i, p -> sb.append("  [$i] ${p.second}\n") }
 
+        val tgtTextNodeCount = countTextNodes(tgtRoot)
+        sb.append("\n(تشخیصی) تعداد گره‌های دارای متن در مقصد: $tgtTextNodeCount\n")
+        if (tgtRoot != null && tgtTextNodeCount < 15) {
+            sb.append("⚠️ این عدد خیلی کمه؛ احتمالاً فایرفاکس متن واقعی این صفحه رو به Accessibility نمی‌ده (شاید رقم‌ها گرافیکی/فونت‌آیکون‌ان).\n")
+        }
+
         sb.append("\nمقصد - دکمه‌های قابل کلیک:\n")
         tgtClicks.forEachIndexed { i, n ->
-            val desc = n.contentDescription?.toString() ?: n.text?.toString() ?: n.className?.toString() ?: "?"
+            val desc = n.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+                ?: n.text?.toString()?.takeIf { it.isNotBlank() }
+                ?: n.className?.toString()?.takeIf { it.isNotBlank() }
+                ?: "(بدون متن)"
             sb.append("  [$i] $desc  (bounds=${boundsOf(n)})\n")
         }
         return sb.toString()
@@ -251,9 +261,10 @@ class PriceSyncAccessibilityService : AccessibilityService() {
 
     /**
      * روش کمکی (فقط وقتی روش ساده هیچی پیدا نکند اجرا می‌شود): برای
-     * صفحاتی که رقم‌های یک عدد را بین چند span جدا می‌شکنند. خیلی
-     * سخت‌گیرانه است تا چیز نامربوطی را قاطی نکند: فقط ۲ تا ۴ فرزندِ
-     * «برگ» که هرکدام فقط رقم/کاما/فاصله دارند (نه حرف) ترکیب می‌شوند.
+     * صفحاتی که رقم‌های یک عدد را بین چند span (حتی در چند لایه‌ی
+     * تودرتو) جدا می‌شکنند. خیلی سخت‌گیرانه است: اگر هر برگ داخل این
+     * زیردرخت هر چیزی غیر از رقم/کاما/فاصله داشته باشد، یا تعداد
+     * برگ‌ها زیاد باشد، کلاً رد می‌شود تا چیز نامربوطی قاطی نشود.
      */
     private fun collectNumberNodesAggregate(
         root: AccessibilityNodeInfo?,
@@ -262,28 +273,51 @@ class PriceSyncAccessibilityService : AccessibilityService() {
     ) {
         if (root == null) return
         val ownText = root.text?.toString() ?: root.contentDescription?.toString()
-        if (ownText.isNullOrBlank() && root.childCount in 2..4) {
-            var ok = true
-            val combined = StringBuilder()
-            for (i in 0 until root.childCount) {
-                val child = root.getChild(i)
-                if (child == null || child.childCount > 0) { ok = false; break }
-                val ct = child.text?.toString() ?: child.contentDescription?.toString()
-                if (ct.isNullOrBlank()) { ok = false; break }
-                val norm = normalizeDigits(ct).trim()
-                if (norm.isEmpty() || !norm.all { it.isDigit() || it == ',' || it == ' ' }) { ok = false; break }
-                combined.append(ct)
-            }
-            if (ok) {
-                val digits = normalizeDigits(combined.toString()).filter { it.isDigit() }
-                if (digits.length in minDigits..12) {
-                    digits.toLongOrNull()?.let { out.add(root to it) }
+        if (ownText.isNullOrBlank() && root.childCount in 2..6) {
+            val leaves = ArrayList<String>()
+            if (collectPureDigitLeaves(root, leaves, 6)) {
+                if (leaves.size in 2..4) {
+                    val combined = leaves.joinToString("")
+                    val digits = normalizeDigits(combined).filter { it.isDigit() }
+                    if (digits.length in maxOf(minDigits, 8)..10) {
+                        digits.toLongOrNull()?.let { out.add(root to it) }
+                    }
                 }
             }
         }
         for (i in 0 until root.childCount) {
             collectNumberNodesAggregate(root.getChild(i), minDigits, out)
         }
+    }
+
+    /** جمع‌آوری بازگشتی متن برگ‌ها؛ اگر هر برگ غیر رقم/کاما/فاصله داشت یا تعداد از حد گذشت، false برمی‌گرداند. */
+    private fun collectPureDigitLeaves(node: AccessibilityNodeInfo, out: MutableList<String>, limit: Int): Boolean {
+        if (out.size > limit) return false
+        if (node.childCount == 0) {
+            val t = node.text?.toString() ?: node.contentDescription?.toString()
+            if (t.isNullOrBlank()) return true
+            val norm = normalizeDigits(t).trim()
+            if (!norm.all { it.isDigit() || it == ',' || it == ' ' }) return false
+            if (norm.any { it.isDigit() }) out.add(t)
+            return true
+        }
+        for (i in 0 until node.childCount) {
+            val c = node.getChild(i) ?: continue
+            if (!collectPureDigitLeaves(c, out, limit)) return false
+        }
+        return true
+    }
+
+    /** تشخیصی: چند گره در این زیردرخت اصلاً متن/contentDescription غیرخالی دارند؟ */
+    private fun countTextNodes(root: AccessibilityNodeInfo?): Int {
+        if (root == null) return 0
+        var count = 0
+        val t = root.text?.toString() ?: root.contentDescription?.toString()
+        if (!t.isNullOrBlank()) count = 1
+        for (i in 0 until root.childCount) {
+            count += countTextNodes(root.getChild(i))
+        }
+        return count
     }
 
     private fun collectNumberNodes(
