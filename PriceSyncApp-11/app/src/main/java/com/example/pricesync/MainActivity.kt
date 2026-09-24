@@ -20,6 +20,7 @@ class MainActivity : Activity() {
     private lateinit var etMaxClicks: EditText
     private lateinit var etFieldMapJson: EditText
     private lateinit var etPauseKeywords: EditText
+    private lateinit var etTrackedValues: EditText
     private lateinit var switchAutoSync: Switch
     private lateinit var tvPreview: TextView
 
@@ -34,6 +35,7 @@ class MainActivity : Activity() {
         etMaxClicks = findViewById(R.id.etMaxClicks)
         etFieldMapJson = findViewById(R.id.etFieldMapJson)
         etPauseKeywords = findViewById(R.id.etPauseKeywords)
+        etTrackedValues = findViewById(R.id.etTrackedValues)
         switchAutoSync = findViewById(R.id.switchAutoSync)
         tvPreview = findViewById(R.id.tvPreview)
 
@@ -84,6 +86,7 @@ class MainActivity : Activity() {
         etMaxClicks.setText(Prefs.getMaxClicks(this).toString())
         etFieldMapJson.setText(Prefs.getFieldMapJson(this))
         etPauseKeywords.setText(Prefs.getPauseKeywords(this).joinToString(","))
+        etTrackedValues.setText(Prefs.getTrackedValuesJson(this))
         switchAutoSync.isChecked = Prefs.getAutoSyncEnabled(this)
     }
 
@@ -95,5 +98,6 @@ class MainActivity : Activity() {
         Prefs.setMaxClicks(this, etMaxClicks.text.toString().toIntOrNull() ?: 60)
         Prefs.setFieldMapJson(this, etFieldMapJson.text.toString())
         Prefs.setPauseKeywords(this, etPauseKeywords.text.toString())
+        Prefs.setTrackedValuesJson(this, etTrackedValues.text.toString())
     }
 }
