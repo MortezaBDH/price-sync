@@ -179,7 +179,8 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         }
 
         val diff = desired - current
-        if (field.clickStep <= 0 || kotlin.math.abs(diff) < field.clickStep) {
+        if (field.clickStep <= 0 || kotlin.math.abs(diff) * 2 < field.clickStep) {
+            // به نزدیک‌ترین مقدار ممکن (با دقت نیم‌کلیک) رسیدیم
             finishOneField()
             return
         }
