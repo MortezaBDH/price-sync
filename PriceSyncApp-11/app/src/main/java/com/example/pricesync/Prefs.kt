@@ -10,11 +10,13 @@ object Prefs {
     private const val FILE = "price_sync_prefs"
 
     // نمونه اولیه — این اعداد فقط مثال هستند، حتما با دکمه «پیش‌نمایش» در اپ کالیبره کنید.
+    // چون مقدار فعلی مقصد قابل خواندن نیست، دیگر targetValueIndex نداریم؛
+    // به‌جایش clickStep (هر کلیک چقدر عدد را تغییر می‌دهد) اضافه شده.
     const val DEFAULT_FIELD_MAP = """[
-  {"name":"نقد فردا - خرید از ما","sourceIndex":1,"targetValueIndex":0,"targetPlusIndex":1,"targetMinusIndex":0,"offset":50000},
-  {"name":"نقد فردا - فروش به ما","sourceIndex":0,"targetValueIndex":1,"targetPlusIndex":3,"targetMinusIndex":2,"offset":-50000},
-  {"name":"نقد پس‌فردا - خرید از ما","sourceIndex":3,"targetValueIndex":2,"targetPlusIndex":5,"targetMinusIndex":4,"offset":50000},
-  {"name":"نقد پس‌فردا - فروش به ما","sourceIndex":2,"targetValueIndex":3,"targetPlusIndex":7,"targetMinusIndex":6,"offset":-50000}
+  {"name":"نقد فردا - خرید از ما","sourceIndex":1,"targetPlusIndex":1,"targetMinusIndex":0,"offset":50000,"clickStep":10000},
+  {"name":"نقد فردا - فروش به ما","sourceIndex":0,"targetPlusIndex":3,"targetMinusIndex":2,"offset":-50000,"clickStep":10000},
+  {"name":"نقد پس‌فردا - خرید از ما","sourceIndex":3,"targetPlusIndex":5,"targetMinusIndex":4,"offset":50000,"clickStep":10000},
+  {"name":"نقد پس‌فردا - فروش به ما","sourceIndex":2,"targetPlusIndex":7,"targetMinusIndex":6,"offset":-50000,"clickStep":10000}
 ]"""
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -47,4 +49,30 @@ object Prefs {
 
     fun getFieldMapJson(ctx: Context): String = prefs(ctx).getString("field_map", DEFAULT_FIELD_MAP) ?: DEFAULT_FIELD_MAP
     fun setFieldMapJson(ctx: Context, v: String) { prefs(ctx).edit().putString("field_map", v).apply() }
+
+    // مقادیر «ردیابی‌شده» مقصد: چون مقدار فعلی مقصد قابل خواندن نیست، اپ خودش
+    // حساب نگه می‌دارد که با کلیک‌های خودش مقدار هر فیلد را چقدر کرده. کاربر
+    // فقط یک‌بار مقدار واقعی فعلی را وارد می‌کند (کالیبراسیون)، بعد از آن
+    // خودِ اپ بعد از هر کلیک این عدد را به‌روز نگه می‌دارد.
+    fun getTrackedValuesJson(ctx: Context): String = prefs(ctx).getString("tracked_values", "{}") ?: "{}"
+    fun setTrackedValuesJson(ctx: Context, v: String) { prefs(ctx).edit().putString("tracked_values", v).apply() }
+
+    fun getTrackedValue(ctx: Context, fieldName: String): Long? {
+        return try {
+            val obj = org.json.JSONObject(getTrackedValuesJson(ctx))
+            if (obj.has(fieldName)) obj.getLong(fieldName) else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun setTrackedValue(ctx: Context, fieldName: String, value: Long) {
+        val obj = try {
+            org.json.JSONObject(getTrackedValuesJson(ctx))
+        } catch (e: Exception) {
+            org.json.JSONObject()
+        }
+        obj.put(fieldName, value)
+        setTrackedValuesJson(ctx, obj.toString())
+    }
 }
