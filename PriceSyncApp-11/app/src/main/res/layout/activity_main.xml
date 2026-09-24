@@ -114,6 +114,21 @@
             android:gravity="top|start"
             android:inputType="textMultiLine" />
 
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textStyle="bold"
+            android:text="مقادیر فعلی واقعی مقصد (کالیبراسیون — چون مقدار مقصد خونده نمی‌شه، اینجا با چشم خودتون وارد کنید؛ کلیدها باید دقیقاً همون «name» تو تنظیمات فیلدها باشن):" />
+        <EditText
+            android:id="@+id/etTrackedValues"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minLines="4"
+            android:gravity="top|start"
+            android:inputType="textMultiLine"
+            android:hint="{&quot;نقد فردا - خرید از ما&quot;:102790000, ...}" />
+
         <Switch
             android:id="@+id/switchAutoSync"
             android:layout_width="wrap_content"
