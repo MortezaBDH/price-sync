@@ -20,10 +20,10 @@ class PriceSyncAccessibilityService : AccessibilityService() {
     data class FieldConfig(
         val name: String,
         val sourceIndex: Int,
-        val targetValueIndex: Int,
         val targetPlusIndex: Int,
         val targetMinusIndex: Int,
-        val offset: Long
+        val offset: Long,
+        val clickStep: Long
     )
 
     private val handler = Handler(Looper.getMainLooper())
@@ -100,6 +100,21 @@ class PriceSyncAccessibilityService : AccessibilityService() {
                 ?: "(بدون متن)"
             sb.append("  [$i] $desc  (bounds=${boundsOf(n)})\n")
         }
+
+        sb.append("\nمقادیر ردیابی‌شده‌ی مقصد (چیزی که خودِ اپ فکر می‌کند الان روی صفحه‌ست):\n")
+        try {
+            val configs = parseFieldConfigs(Prefs.getFieldMapJson(this))
+            if (configs.isEmpty()) {
+                sb.append("  (هیچ فیلدی تعریف نشده)\n")
+            } else {
+                for (f in configs) {
+                    val tv = Prefs.getTrackedValue(this, f.name)
+                    sb.append("  ${f.name}: ${tv?.toString() ?: "❗️کالیبره نشده"}\n")
+                }
+            }
+        } catch (e: Exception) {
+            sb.append("  (خطا در خواندن تنظیمات فیلدها: ${e.message})\n")
+        }
         return sb.toString()
     }
 
@@ -149,26 +164,29 @@ class PriceSyncAccessibilityService : AccessibilityService() {
 
         val srcNums = ArrayList<Pair<AccessibilityNodeInfo, Long>>()
         collectNumberNodes(srcRoot, minDigits, srcNums)
-        val tgtNums = ArrayList<Pair<AccessibilityNodeInfo, Long>>()
-        collectNumberNodes(tgtRoot, minDigits, tgtNums)
-        val tgtClicks = ArrayList<AccessibilityNodeInfo>()
-        collectClickableNodes(tgtRoot, tgtClicks)
-
-        if (field.sourceIndex >= srcNums.size || field.targetValueIndex >= tgtNums.size) {
-            Log.w(TAG, "ایندکس فیلد «${field.name}» خارج از محدوده است")
+        if (field.sourceIndex >= srcNums.size) {
+            Log.w(TAG, "ایندکس منبع برای «${field.name}» خارج از محدوده است")
             finishOneField()
             return
         }
 
         val desired = srcNums[field.sourceIndex].second + field.offset
-        val current = tgtNums[field.targetValueIndex].second
-
-        if (desired == current) {
+        val current = Prefs.getTrackedValue(this, field.name)
+        if (current == null) {
+            Log.w(TAG, "«${field.name}» هنوز کالیبره نشده — مقدار فعلی مقصد را در تنظیمات وارد کنید")
             finishOneField()
             return
         }
 
-        val btnIndex = if (desired > current) field.targetPlusIndex else field.targetMinusIndex
+        val diff = desired - current
+        if (field.clickStep <= 0 || kotlin.math.abs(diff) < field.clickStep) {
+            finishOneField()
+            return
+        }
+
+        val tgtClicks = ArrayList<AccessibilityNodeInfo>()
+        collectClickableNodes(tgtRoot, tgtClicks)
+        val btnIndex = if (diff > 0) field.targetPlusIndex else field.targetMinusIndex
         if (btnIndex < 0 || btnIndex >= tgtClicks.size) {
             Log.w(TAG, "ایندکس دکمه برای «${field.name}» خارج از محدوده است")
             finishOneField()
@@ -176,7 +194,9 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         }
 
         tgtClicks[btnIndex].performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        Log.i(TAG, "${field.name}: current=$current desired=$desired -> click[$btnIndex]")
+        val newTracked = current + (if (diff > 0) field.clickStep else -field.clickStep)
+        Prefs.setTrackedValue(this, field.name, newTracked)
+        Log.i(TAG, "${field.name}: tracked=$current -> $newTracked (desired=$desired) click[$btnIndex]")
 
         handler.postDelayed({ syncFieldStep(field, attemptsLeft - 1) }, clickDelay)
     }
@@ -373,10 +393,10 @@ class PriceSyncAccessibilityService : AccessibilityService() {
                 FieldConfig(
                     name = o.optString("name", "field$i"),
                     sourceIndex = o.getInt("sourceIndex"),
-                    targetValueIndex = o.getInt("targetValueIndex"),
                     targetPlusIndex = o.getInt("targetPlusIndex"),
                     targetMinusIndex = o.getInt("targetMinusIndex"),
-                    offset = o.getLong("offset")
+                    offset = o.getLong("offset"),
+                    clickStep = o.optLong("clickStep", 10000L)
                 )
             )
         }
