@@ -14,6 +14,7 @@ class PriceSyncAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "PriceSync"
+        private const val HEARTBEAT_MS = 4000L
         @Volatile var instance: PriceSyncAccessibilityService? = null
     }
 
@@ -29,14 +30,25 @@ class PriceSyncAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     @Volatile private var activeFieldSyncs = 0
 
+    private val heartbeat = object : Runnable {
+        override fun run() {
+            if (Prefs.getAutoSyncEnabled(this@PriceSyncAccessibilityService) && activeFieldSyncs == 0) {
+                syncAllFields()
+            }
+            handler.postDelayed(this, HEARTBEAT_MS)
+        }
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        handler.postDelayed(heartbeat, HEARTBEAT_MS)
         Log.i(TAG, "سرویس فعال شد")
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        handler.removeCallbacks(heartbeat)
         instance = null
     }
 
@@ -180,7 +192,6 @@ class PriceSyncAccessibilityService : AccessibilityService() {
 
         val diff = desired - current
         if (field.clickStep <= 0 || kotlin.math.abs(diff) * 2 < field.clickStep) {
-            // به نزدیک‌ترین مقدار ممکن (با دقت نیم‌کلیک) رسیدیم
             finishOneField()
             return
         }
@@ -240,7 +251,6 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         return null
     }
 
-    /** آیا صفحه‌ی منبع یا مقصد الان یکی از پاپ‌آپ‌های «درخواست معامله» رو نشون می‌ده؟ */
     private fun isBlockedByPopup(srcRoot: AccessibilityNodeInfo?, tgtRoot: AccessibilityNodeInfo?): Boolean {
         val keywords = Prefs.getPauseKeywords(this)
         if (keywords.isEmpty()) return false
@@ -261,7 +271,6 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         return false
     }
 
-    /** روش اصلی و امن: فقط متن خودِ هر گره را می‌خواند (همان چیزی که از اول درست کار می‌کرد). */
     private fun collectNumberNodesSimple(
         root: AccessibilityNodeInfo?,
         minDigits: Int,
@@ -280,13 +289,6 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         }
     }
 
-    /**
-     * روش کمکی (فقط وقتی روش ساده هیچی پیدا نکند اجرا می‌شود): برای
-     * صفحاتی که رقم‌های یک عدد را بین چند span (حتی در چند لایه‌ی
-     * تودرتو) جدا می‌شکنند. خیلی سخت‌گیرانه است: اگر هر برگ داخل این
-     * زیردرخت هر چیزی غیر از رقم/کاما/فاصله داشته باشد، یا تعداد
-     * برگ‌ها زیاد باشد، کلاً رد می‌شود تا چیز نامربوطی قاطی نشود.
-     */
     private fun collectNumberNodesAggregate(
         root: AccessibilityNodeInfo?,
         minDigits: Int,
@@ -311,7 +313,6 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** جمع‌آوری بازگشتی متن برگ‌ها؛ اگر هر برگ غیر رقم/کاما/فاصله داشت یا تعداد از حد گذشت، false برمی‌گرداند. */
     private fun collectPureDigitLeaves(node: AccessibilityNodeInfo, out: MutableList<String>, limit: Int): Boolean {
         if (out.size > limit) return false
         if (node.childCount == 0) {
@@ -329,7 +330,6 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         return true
     }
 
-    /** تشخیصی: چند گره در این زیردرخت اصلاً متن/contentDescription غیرخالی دارند؟ */
     private fun countTextNodes(root: AccessibilityNodeInfo?): Int {
         if (root == null) return 0
         var count = 0
