@@ -29,6 +29,7 @@ class PriceSyncAccessibilityService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     @Volatile private var activeFieldSyncs = 0
+    private val targetEventLog = ArrayDeque<String>()
 
     private val heartbeat = object : Runnable {
         override fun run() {
@@ -55,11 +56,28 @@ class PriceSyncAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event != null) logTargetEventIfRelevant(event)
         val sourcePkg = Prefs.getSourcePackage(this)
         if (sourcePkg.isBlank() || !Prefs.getAutoSyncEnabled(this)) return
         val evPkg = event?.packageName?.toString() ?: return
         if (evPkg == sourcePkg && activeFieldSyncs == 0) {
             syncAllFields()
+        }
+    }
+
+    /** برای تشخیص این‌که آیا قیمت مقصد از طریق رویداد (نه درخت ثابت) می‌رسد. */
+    private fun logTargetEventIfRelevant(event: AccessibilityEvent) {
+        val targetPkg = Prefs.getTargetPackage(this)
+        if (targetPkg.isBlank() || event.packageName?.toString() != targetPkg) return
+        val minDigits = Prefs.getMinDigits(this)
+        val raw = (event.text?.joinToString(" ") ?: "") + " " + (event.contentDescription?.toString() ?: "")
+        val digits = normalizeDigits(raw).filter { it.isDigit() }
+        if (digits.length >= minDigits && raw.isNotBlank()) {
+            val entry = "[${event.eventType}] $raw"
+            synchronized(targetEventLog) {
+                targetEventLog.addFirst(entry)
+                while (targetEventLog.size > 25) targetEventLog.removeLast()
+            }
         }
     }
 
@@ -126,6 +144,15 @@ class PriceSyncAccessibilityService : AccessibilityService() {
             }
         } catch (e: Exception) {
             sb.append("  (خطا در خواندن تنظیمات فیلدها: ${e.message})\n")
+        }
+
+        sb.append("\n(آزمایشی) متن‌های عددی که از رویدادهای مقصد ضبط شده (اگه اینجا عدد قیمت دیدید، یعنی راه جدید جواب می‌ده):\n")
+        synchronized(targetEventLog) {
+            if (targetEventLog.isEmpty()) {
+                sb.append("  (چیزی ضبط نشده — چند ثانیه صبر کنید تا قیمت مقصد عوض بشه، بعد دوباره پیش‌نمایش بگیرید)\n")
+            } else {
+                targetEventLog.forEach { sb.append("  $it\n") }
+            }
         }
         return sb.toString()
     }
