@@ -1,13 +1,20 @@
 package com.example.pricesync
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import androidx.core.content.ContextCompat
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import org.json.JSONArray
 
 class PriceSyncAccessibilityService : AccessibilityService() {
@@ -30,6 +37,7 @@ class PriceSyncAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     @Volatile private var activeFieldSyncs = 0
     private val targetEventLog = ArrayDeque<String>()
+    private val textRecognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
     private val heartbeat = object : Runnable {
         override fun run() {
@@ -50,6 +58,7 @@ class PriceSyncAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(heartbeat)
+        try { textRecognizer.close() } catch (e: Exception) { }
         instance = null
     }
 
@@ -65,7 +74,6 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** برای تشخیص این‌که آیا قیمت مقصد از طریق رویداد (نه درخت ثابت) می‌رسد. */
     private fun logTargetEventIfRelevant(event: AccessibilityEvent) {
         val targetPkg = Prefs.getTargetPackage(this)
         if (targetPkg.isBlank() || event.packageName?.toString() != targetPkg) return
@@ -87,8 +95,8 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         syncAllFields()
     }
 
-    /** یک اسکن فوری (بدون کلیک) برای کالیبراسیون ایندکس‌ها از داخل اپ. */
-    fun getDebugSnapshot(): String {
+    /** پیش‌نمایش (آسنکرون چون شامل OCR است). */
+    fun getDebugSnapshot(callback: (String) -> Unit) {
         val sourcePkg = Prefs.getSourcePackage(this)
         val targetPkg = Prefs.getTargetPackage(this)
         val minDigits = Prefs.getMinDigits(this)
@@ -98,8 +106,6 @@ class PriceSyncAccessibilityService : AccessibilityService() {
 
         val srcNums = ArrayList<Pair<AccessibilityNodeInfo, Long>>()
         collectNumberNodes(srcRoot, minDigits, srcNums)
-        val tgtNums = ArrayList<Pair<AccessibilityNodeInfo, Long>>()
-        collectNumberNodes(tgtRoot, minDigits, tgtNums)
         val tgtClicks = ArrayList<AccessibilityNodeInfo>()
         collectClickableNodes(tgtRoot, tgtClicks)
 
@@ -108,19 +114,8 @@ class PriceSyncAccessibilityService : AccessibilityService() {
         sb.append(if (blocked) "⛔ الان یه پاپ‌آپ/بنر معامله دیده می‌شود — سینک موقتاً متوقف می‌ماند.\n\n"
                    else "✅ پاپ‌آپ معامله دیده نمی‌شود.\n\n")
         sb.append("منبع (").append(sourcePkg).append(")")
-        sb.append(if (srcRoot == null) " -> پیدا نشد! (اپ باز است؟ نام پکیج درست است؟)\n" else ":\n")
+        sb.append(if (srcRoot == null) " -> پیدا نشد!\n" else ":\n")
         srcNums.forEachIndexed { i, p -> sb.append("  [$i] ${p.second}\n") }
-        sb.append("(تشخیصی) تعداد گره‌های دارای متن در منبع: ${countTextNodes(srcRoot)}\n")
-
-        sb.append("\nمقصد (").append(targetPkg).append(") - اعداد")
-        sb.append(if (tgtRoot == null) " -> پیدا نشد!\n" else ":\n")
-        tgtNums.forEachIndexed { i, p -> sb.append("  [$i] ${p.second}\n") }
-
-        val tgtTextNodeCount = countTextNodes(tgtRoot)
-        sb.append("\n(تشخیصی) تعداد گره‌های دارای متن در مقصد: $tgtTextNodeCount\n")
-        if (tgtRoot != null && tgtTextNodeCount < 15) {
-            sb.append("⚠️ این عدد خیلی کمه؛ احتمالاً فایرفاکس متن واقعی این صفحه رو به Accessibility نمی‌ده (شاید رقم‌ها گرافیکی/فونت‌آیکون‌ان).\n")
-        }
 
         sb.append("\nمقصد - دکمه‌های قابل کلیک:\n")
         tgtClicks.forEachIndexed { i, n ->
@@ -131,117 +126,205 @@ class PriceSyncAccessibilityService : AccessibilityService() {
             sb.append("  [$i] $desc  (bounds=${boundsOf(n)})\n")
         }
 
-        sb.append("\nمقادیر ردیابی‌شده‌ی مقصد (چیزی که خودِ اپ فکر می‌کند الان روی صفحه‌ست):\n")
+        sb.append("\nمقادیر ردیابی‌شده (fallback، اگه OCR جواب نداد استفاده می‌شه):\n")
         try {
             val configs = parseFieldConfigs(Prefs.getFieldMapJson(this))
-            if (configs.isEmpty()) {
-                sb.append("  (هیچ فیلدی تعریف نشده)\n")
-            } else {
-                for (f in configs) {
-                    val tv = Prefs.getTrackedValue(this, f.name)
-                    sb.append("  ${f.name}: ${tv?.toString() ?: "❗️کالیبره نشده"}\n")
-                }
+            for (f in configs) {
+                val tv = Prefs.getTrackedValue(this, f.name)
+                sb.append("  ${f.name}: ${tv?.toString() ?: "❗️کالیبره نشده"}\n")
             }
         } catch (e: Exception) {
-            sb.append("  (خطا در خواندن تنظیمات فیلدها: ${e.message})\n")
+            sb.append("  (خطا در تنظیمات فیلدها: ${e.message})\n")
         }
 
-        sb.append("\n(آزمایشی) متن‌های عددی که از رویدادهای مقصد ضبط شده (اگه اینجا عدد قیمت دیدید، یعنی راه جدید جواب می‌ده):\n")
-        synchronized(targetEventLog) {
-            if (targetEventLog.isEmpty()) {
-                sb.append("  (چیزی ضبط نشده — چند ثانیه صبر کنید تا قیمت مقصد عوض بشه، بعد دوباره پیش‌نمایش بگیرید)\n")
-            } else {
-                targetEventLog.forEach { sb.append("  $it\n") }
-            }
+        if (tgtRoot == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            sb.append("\n(OCR) در دسترس نیست (یا اپ مقصد پیدا نشد، یا اندروید قدیمی‌تر از ۱۱ است).\n")
+            callback(sb.toString())
+            return
         }
-        return sb.toString()
+
+        sb.append("\n(OCR) در حال گرفتن اسکرین‌شات و خواندن اعداد از روی تصویر مقصد...\n")
+        captureAndRecognizeTarget(tgtRoot) { ocrNums ->
+            sb.append("\n(OCR) اعدادی که از روی تصویر مقصد خوانده شد (از بالا به پایین):\n")
+            if (ocrNums.isEmpty()) {
+                sb.append("  (هیچ عددی پیدا نشد)\n")
+            } else {
+                ocrNums.sortedBy { it.first.top }.forEach { (r, v) ->
+                    sb.append("  $v  (bounds=${r.left},${r.top},${r.right},${r.bottom})\n")
+                }
+            }
+            callback(sb.toString())
+        }
     }
 
-    // ---------- منطق اصلی همگام‌سازی ----------
+    // ---------- منطق اصلی همگام‌سازی (بر پایه OCR، هر دور یک اسکرین‌شات) ----------
 
     private fun syncAllFields() {
+        if (activeFieldSyncs != 0) return
+        activeFieldSyncs = 1
+        runSyncTick(Prefs.getMaxClicks(this))
+    }
+
+    private fun runSyncTick(roundsLeft: Int) {
+        if (roundsLeft <= 0) { activeFieldSyncs = 0; return }
+
         val configs = try {
             parseFieldConfigs(Prefs.getFieldMapJson(this))
         } catch (e: Exception) {
             Log.e(TAG, "فرمت JSON تنظیمات فیلدها اشتباه است: ${e.message}")
+            activeFieldSyncs = 0
             return
         }
-        val srcRoot = findRootForPackage(Prefs.getSourcePackage(this))
-        val tgtRoot = findRootForPackage(Prefs.getTargetPackage(this))
-        if (isBlockedByPopup(srcRoot, tgtRoot)) {
-            Log.i(TAG, "پاپ‌آپ/بنر معامله دیده شد؛ این چرخه رد می‌شود")
-            return
-        }
-        val maxAttempts = Prefs.getMaxClicks(this)
-        activeFieldSyncs += configs.size
-        for (field in configs) {
-            syncFieldStep(field, maxAttempts)
-        }
-    }
+        if (configs.isEmpty()) { activeFieldSyncs = 0; return }
 
-    private fun syncFieldStep(field: FieldConfig, attemptsLeft: Int) {
-        if (attemptsLeft <= 0) {
-            finishOneField()
-            return
-        }
         val sourcePkg = Prefs.getSourcePackage(this)
         val targetPkg = Prefs.getTargetPackage(this)
         val minDigits = Prefs.getMinDigits(this)
-        val clickDelay = Prefs.getClickDelayMs(this)
 
         val srcRoot = findRootForPackage(sourcePkg)
         val tgtRoot = findRootForPackage(targetPkg)
-        if (srcRoot == null || tgtRoot == null) {
-            finishOneField()
-            return
-        }
-        if (isBlockedByPopup(srcRoot, tgtRoot)) {
-            Log.i(TAG, "پاپ‌آپ/بنر معامله وسط چرخه ظاهر شد؛ «${field.name}» متوقف شد")
-            finishOneField()
+        if (srcRoot == null || tgtRoot == null || isBlockedByPopup(srcRoot, tgtRoot)) {
+            activeFieldSyncs = 0
             return
         }
 
         val srcNums = ArrayList<Pair<AccessibilityNodeInfo, Long>>()
         collectNumberNodes(srcRoot, minDigits, srcNums)
-        if (field.sourceIndex >= srcNums.size) {
-            Log.w(TAG, "ایندکس منبع برای «${field.name}» خارج از محدوده است")
-            finishOneField()
-            return
-        }
-
-        val desired = srcNums[field.sourceIndex].second + field.offset
-        val current = Prefs.getTrackedValue(this, field.name)
-        if (current == null) {
-            Log.w(TAG, "«${field.name}» هنوز کالیبره نشده — مقدار فعلی مقصد را در تنظیمات وارد کنید")
-            finishOneField()
-            return
-        }
-
-        val diff = desired - current
-        if (field.clickStep <= 0 || kotlin.math.abs(diff) * 2 < field.clickStep) {
-            finishOneField()
-            return
-        }
-
         val tgtClicks = ArrayList<AccessibilityNodeInfo>()
         collectClickableNodes(tgtRoot, tgtClicks)
-        val btnIndex = if (diff > 0) field.targetPlusIndex else field.targetMinusIndex
-        if (btnIndex < 0 || btnIndex >= tgtClicks.size) {
-            Log.w(TAG, "ایندکس دکمه برای «${field.name}» خارج از محدوده است")
-            finishOneField()
+
+        val useOcr = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+        if (!useOcr) {
+            runTickLogic(configs, srcNums, tgtClicks, emptyList(), roundsLeft)
             return
         }
-
-        tgtClicks[btnIndex].performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        val newTracked = current + (if (diff > 0) field.clickStep else -field.clickStep)
-        Prefs.setTrackedValue(this, field.name, newTracked)
-        Log.i(TAG, "${field.name}: tracked=$current -> $newTracked (desired=$desired) click[$btnIndex]")
-
-        handler.postDelayed({ syncFieldStep(field, attemptsLeft - 1) }, clickDelay)
+        captureAndRecognizeTarget(tgtRoot) { ocrNums ->
+            runTickLogic(configs, srcNums, tgtClicks, ocrNums, roundsLeft)
+        }
     }
 
-    private fun finishOneField() {
-        activeFieldSyncs = (activeFieldSyncs - 1).coerceAtLeast(0)
+    private fun runTickLogic(
+        configs: List<FieldConfig>,
+        srcNums: List<Pair<AccessibilityNodeInfo, Long>>,
+        tgtClicks: List<AccessibilityNodeInfo>,
+        ocrNums: List<Pair<Rect, Long>>,
+        roundsLeft: Int
+    ) {
+        var clickedAny = false
+        for (field in configs) {
+            if (field.sourceIndex >= srcNums.size) continue
+            if (field.targetPlusIndex !in tgtClicks.indices || field.targetMinusIndex !in tgtClicks.indices) continue
+
+            val desired = srcNums[field.sourceIndex].second + field.offset
+
+            val plusRect = Rect(); tgtClicks[field.targetPlusIndex].getBoundsInScreen(plusRect)
+            val minusRect = Rect(); tgtClicks[field.targetMinusIndex].getBoundsInScreen(minusRect)
+            val btnTopY = minOf(plusRect.top, minusRect.top)
+            val btnCenterX = (plusRect.centerX() + minusRect.centerX()) / 2
+
+            val current = findNearestPriceAbove(ocrNums, btnTopY, btnCenterX)
+                ?: Prefs.getTrackedValue(this, field.name)
+                ?: continue
+
+            val step = if (field.clickStep > 0) field.clickStep else 1000L
+            val diff = desired - current
+            if (kotlin.math.abs(diff) * 2 < step) continue
+
+            val btnIndex = if (diff > 0) field.targetPlusIndex else field.targetMinusIndex
+            tgtClicks[btnIndex].performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            Prefs.setTrackedValue(this, field.name, current + (if (diff > 0) step else -step))
+            clickedAny = true
+            Log.i(TAG, "${field.name}: current=$current desired=$desired -> click[$btnIndex]")
+        }
+
+        if (clickedAny) {
+            handler.postDelayed({ runSyncTick(roundsLeft - 1) }, Prefs.getClickDelayMs(this))
+        } else {
+            activeFieldSyncs = 0
+        }
+    }
+
+    /** نزدیک‌ترین عدد OCR‌شده که «بالای» ردیف دکمه و هم‌ستونِ آن است. */
+    private fun findNearestPriceAbove(ocr: List<Pair<Rect, Long>>, buttonTopY: Int, buttonCenterX: Int): Long? {
+        var best: Long? = null
+        var bestDist = Int.MAX_VALUE
+        for ((rect, value) in ocr) {
+            if (rect.bottom > buttonTopY + 20) continue
+            val cx = (rect.left + rect.right) / 2
+            if (kotlin.math.abs(cx - buttonCenterX) > 220) continue
+            val dist = buttonTopY - rect.bottom
+            if (dist in 0..300 && dist < bestDist) {
+                bestDist = dist
+                best = value
+            }
+        }
+        return best
+    }
+
+    /** اسکرین‌شات از کل صفحه می‌گیرد، به محدوده‌ی پنجره‌ی مقصد کراپ می‌کند، و با OCR رقم‌ها را می‌خواند. */
+    private fun captureAndRecognizeTarget(tgtRoot: AccessibilityNodeInfo, onResult: (List<Pair<Rect, Long>>) -> Unit) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            onResult(emptyList())
+            return
+        }
+        try {
+            takeScreenshot(Display.DEFAULT_DISPLAY, ContextCompat.getMainExecutor(this), object : TakeScreenshotCallback {
+                override fun onSuccess(result: ScreenshotResult) {
+                    try {
+                        val hb = result.hardwareBuffer
+                        val hwBitmap = Bitmap.wrapHardwareBuffer(hb, result.colorSpace)
+                        hb.close()
+                        if (hwBitmap == null) { onResult(emptyList()); return }
+                        val softBitmap = hwBitmap.copy(Bitmap.Config.ARGB_8888, false)
+                        hwBitmap.recycle()
+
+                        val winRect = Rect()
+                        tgtRoot.getBoundsInScreen(winRect)
+                        val safe = Rect(
+                            winRect.left.coerceIn(0, softBitmap.width),
+                            winRect.top.coerceIn(0, softBitmap.height),
+                            winRect.right.coerceIn(0, softBitmap.width),
+                            winRect.bottom.coerceIn(0, softBitmap.height)
+                        )
+                        if (safe.width() <= 0 || safe.height() <= 0) { onResult(emptyList()); return }
+
+                        val cropped = Bitmap.createBitmap(softBitmap, safe.left, safe.top, safe.width(), safe.height())
+                        val input = InputImage.fromBitmap(cropped, 0)
+                        val minDigits = Prefs.getMinDigits(this@PriceSyncAccessibilityService)
+                        textRecognizer.process(input)
+                            .addOnSuccessListener { text ->
+                                val out = ArrayList<Pair<Rect, Long>>()
+                                for (block in text.textBlocks) {
+                                    for (line in block.lines) {
+                                        val digits = normalizeDigits(line.text).filter { it.isDigit() }
+                                        if (digits.length in minDigits..10) {
+                                            val v = digits.toLongOrNull() ?: continue
+                                            val r = line.boundingBox ?: continue
+                                            out.add(Rect(r.left + safe.left, r.top + safe.top, r.right + safe.left, r.bottom + safe.top) to v)
+                                        }
+                                    }
+                                }
+                                onResult(out)
+                            }
+                            .addOnFailureListener { e ->
+                                Log.e(TAG, "OCR failed: ${e.message}")
+                                onResult(emptyList())
+                            }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "screenshot processing error: ${e.message}")
+                        onResult(emptyList())
+                    }
+                }
+
+                override fun onFailure(errorCode: Int) {
+                    Log.w(TAG, "takeScreenshot failed: $errorCode")
+                    onResult(emptyList())
+                }
+            })
+        } catch (e: Exception) {
+            Log.e(TAG, "takeScreenshot call error: ${e.message}")
+            onResult(emptyList())
+        }
     }
 
     // ---------- توابع کمکی ----------
