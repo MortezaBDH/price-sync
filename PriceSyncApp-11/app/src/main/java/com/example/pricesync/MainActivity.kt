@@ -53,8 +53,12 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.btnRefreshPreview).setOnClickListener {
             saveUiIntoPrefs()
             val svc = PriceSyncAccessibilityService.instance
-            tvPreview.text = svc?.getDebugSnapshot()
-                ?: "سرویس Accessibility فعال نیست. اول آن را از دکمه بالا روشن کنید."
+            if (svc == null) {
+                tvPreview.text = "سرویس Accessibility فعال نیست. اول آن را از دکمه بالا روشن کنید."
+            } else {
+                tvPreview.text = "در حال دریافت (شامل OCR، چند ثانیه طول می‌کشد)..."
+                svc.getDebugSnapshot { result -> tvPreview.text = result }
+            }
         }
 
         findViewById<Button>(R.id.btnSyncNow).setOnClickListener {
