@@ -222,9 +222,14 @@ class PriceSyncAccessibilityService : AccessibilityService() {
             val btnTopY = minOf(plusRect.top, minusRect.top)
             val btnCenterX = (plusRect.centerX() + minusRect.centerX()) / 2
 
-            val current = findNearestPriceAbove(ocrNums, btnTopY, btnCenterX)
-                ?: Prefs.getTrackedValue(this, field.name)
-                ?: continue
+val trackedVal = Prefs.getTrackedValue(this, field.name)
+            val ocrVal = findNearestPriceAbove(ocrNums, btnTopY, btnCenterX)
+            val current: Long = when {
+                ocrVal != null && trackedVal == null -> ocrVal
+                ocrVal != null && trackedVal != null && ocrVal in (trackedVal * 9 / 10)..(trackedVal * 11 / 10) -> ocrVal
+                trackedVal != null -> trackedVal
+                else -> continue
+            }
 
             val step = if (field.clickStep > 0) field.clickStep else 1000L
             val diff = desired - current
