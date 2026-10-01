@@ -491,4 +491,26 @@ class PriceSyncAccessibilityService : AccessibilityService() {
 
     private fun boundsOf(n: AccessibilityNodeInfo): String {
         val r = Rect()
-        n.getB
+        n.getBoundsInScreen(r)
+        return "${r.left},${r.top},${r.right},${r.bottom}"
+    }
+
+    private fun parseFieldConfigs(json: String): List<FieldConfig> {
+        val arr = JSONArray(json)
+        val list = mutableListOf<FieldConfig>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            list.add(
+                FieldConfig(
+                    name = o.optString("name", "field$i"),
+                    sourceIndex = o.getInt("sourceIndex"),
+                    targetPlusIndex = o.getInt("targetPlusIndex"),
+                    targetMinusIndex = o.getInt("targetMinusIndex"),
+                    offset = o.getLong("offset"),
+                    clickStep = o.optLong("clickStep", 10000L)
+                )
+            )
+        }
+        return list
+    }
+}
