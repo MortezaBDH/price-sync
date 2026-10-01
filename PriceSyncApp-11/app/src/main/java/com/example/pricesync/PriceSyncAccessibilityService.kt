@@ -222,14 +222,9 @@ class PriceSyncAccessibilityService : AccessibilityService() {
             val btnTopY = minOf(plusRect.top, minusRect.top)
             val btnCenterX = (plusRect.centerX() + minusRect.centerX()) / 2
 
-val trackedVal = Prefs.getTrackedValue(this, field.name)
-            val ocrVal = findNearestPriceAbove(ocrNums, btnTopY, btnCenterX)
-            val current: Long = when {
-                ocrVal != null && trackedVal == null -> ocrVal
-                ocrVal != null && trackedVal != null && ocrVal in (trackedVal * 9 / 10)..(trackedVal * 11 / 10) -> ocrVal
-                trackedVal != null -> trackedVal
-                else -> continue
-            }
+            val current = findNearestPriceAbove(ocrNums, btnTopY, btnCenterX)
+                ?: Prefs.getTrackedValue(this, field.name)
+                ?: continue
 
             val step = if (field.clickStep > 0) field.clickStep else 1000L
             val diff = desired - current
@@ -496,26 +491,4 @@ val trackedVal = Prefs.getTrackedValue(this, field.name)
 
     private fun boundsOf(n: AccessibilityNodeInfo): String {
         val r = Rect()
-        n.getBoundsInScreen(r)
-        return "${r.left},${r.top},${r.right},${r.bottom}"
-    }
-
-    private fun parseFieldConfigs(json: String): List<FieldConfig> {
-        val arr = JSONArray(json)
-        val list = mutableListOf<FieldConfig>()
-        for (i in 0 until arr.length()) {
-            val o = arr.getJSONObject(i)
-            list.add(
-                FieldConfig(
-                    name = o.optString("name", "field$i"),
-                    sourceIndex = o.getInt("sourceIndex"),
-                    targetPlusIndex = o.getInt("targetPlusIndex"),
-                    targetMinusIndex = o.getInt("targetMinusIndex"),
-                    offset = o.getLong("offset"),
-                    clickStep = o.optLong("clickStep", 10000L)
-                )
-            )
-        }
-        return list
-    }
-}
+        n.getB
