@@ -37,6 +37,7 @@ class PriceSyncAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     @Volatile private var activeFieldSyncs = 0
     private val targetEventLog = ArrayDeque<String>()
+    private val lastClickDirection = HashMap<String, Int>()
     private val textRecognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
     private val heartbeat = object : Runnable {
@@ -221,7 +222,8 @@ class PriceSyncAccessibilityService : AccessibilityService() {
             val minusRect = Rect(); tgtClicks[field.targetMinusIndex].getBoundsInScreen(minusRect)
             val btnTopY = minOf(plusRect.top, minusRect.top)
             val btnCenterX = (plusRect.centerX() + minusRect.centerX()) / 2
-val trackedVal = Prefs.getTrackedValue(this, field.name)
+
+            val trackedVal = Prefs.getTrackedValue(this, field.name)
             val ocrVal = findNearestPriceAbove(ocrNums, btnTopY, btnCenterX)
             val current: Long = when {
                 ocrVal != null && trackedVal == null -> ocrVal
@@ -229,14 +231,27 @@ val trackedVal = Prefs.getTrackedValue(this, field.name)
                 trackedVal != null -> trackedVal
                 else -> continue
             }
-            
 
             val step = if (field.clickStep > 0) field.clickStep else 1000L
             val diff = desired - current
-            if (kotlin.math.abs(diff) * 2 < step) continue
+            if (kotlin.math.abs(diff) * 2 < step) {
+                lastClickDirection.remove(field.name)
+                continue
+            }
+
+            val intendedDir = if (diff > 0) 1 else -1
+            val lastDir = lastClickDirection[field.name]
+            if (lastDir != null && lastDir != intendedDir) {
+                // جهت نسبت به کلیک قبلی برعکس شده — احتمال نوسان دور هدف.
+                // این دور صبر می‌کنیم تا دور بعد با OCR تازه دوباره تصمیم بگیریم.
+                lastClickDirection.remove(field.name)
+                Log.i(TAG, "${field.name}: جهت برعکس شد، این دور کلیک نمی‌زنیم (ضدنوسان)")
+                continue
+            }
 
             val btnIndex = if (diff > 0) field.targetPlusIndex else field.targetMinusIndex
             tgtClicks[btnIndex].performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            lastClickDirection[field.name] = intendedDir
             Prefs.setTrackedValue(this, field.name, current + (if (diff > 0) step else -step))
             clickedAny = true
             Log.i(TAG, "${field.name}: current=$current desired=$desired -> click[$btnIndex]")
