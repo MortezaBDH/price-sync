@@ -38,6 +38,7 @@ class PriceSyncAccessibilityService : AccessibilityService() {
     @Volatile private var activeFieldSyncs = 0
     private val targetEventLog = ArrayDeque<String>()
     private val lastClickDirection = HashMap<String, Int>()
+    private val fieldUnsettled = HashSet<String>()
     private val textRecognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
     private val heartbeat = object : Runnable {
@@ -234,10 +235,22 @@ class PriceSyncAccessibilityService : AccessibilityService() {
 
             val step = if (field.clickStep > 0) field.clickStep else 1000L
             val diff = desired - current
-            if (kotlin.math.abs(diff) * 2 < step) {
+
+            // منطقه‌ی مرده‌ی نامتقارن (hysteresis): اگه این فیلد تازه «ساکت»
+            // شده، فقط وقتی فاصله به‌اندازه‌ی یک کلیک کامل برسه دوباره شروع
+            // به تصحیح می‌کنه؛ نه با هر لرزش کوچیک زیر نیم‌کلیک.
+            val wasUnsettled = fieldUnsettled.contains(field.name)
+            val needsCorrection = if (wasUnsettled) {
+                kotlin.math.abs(diff) * 2 >= step
+            } else {
+                kotlin.math.abs(diff) >= step
+            }
+            if (!needsCorrection) {
+                fieldUnsettled.remove(field.name)
                 lastClickDirection.remove(field.name)
                 continue
             }
+            fieldUnsettled.add(field.name)
 
             val intendedDir = if (diff > 0) 1 else -1
             val lastDir = lastClickDirection[field.name]
